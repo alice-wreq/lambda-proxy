@@ -1,0 +1,166 @@
+#!/bin/bash
+# Lambda custom runtime bootstrap for Bun (provided.al2023 + Function URL fetch handler)
+set -euo pipefail
+
+export PATH="/opt:/opt/bin:${PATH}"
+BUN_BIN=""
+for c in /opt/bun /opt/bin/bun "$(dirname "$0")/bun"; do
+  if [[ -x "$c" ]]; then BUN_BIN="$c"; break; fi
+done
+if [[ -z "$BUN_BIN" ]]; then
+  echo "bun binary not found in layer" >&2
+  exit 127
+fi
+
+# Handler like index.fetch → module index, export fetch (default { fetch })
+_HANDLER="${_HANDLER:-${AWS_LAMBDA_FUNCTION_HANDLER:-index.fetch}}"
+export AWS_LAMBDA_FUNCTION_HANDLER="$_HANDLER"
+
+cd "${LAMBDA_TASK_ROOT:-/var/task}"
+
+# bun -e 로 인라인 런타임 (bun run -e 는 package.json scripts 로 해석됨)
+exec "$BUN_BIN" -e '
+const runtimeApi = process.env.AWS_LAMBDA_RUNTIME_API;
+if (!runtimeApi) {
+  console.error("AWS_LAMBDA_RUNTIME_API missing");
+  process.exit(1);
+}
+const handlerSpec = process.env.AWS_LAMBDA_FUNCTION_HANDLER || "index.fetch";
+const [modName, exportName = "fetch"] = handlerSpec.split(".");
+const base = process.env.LAMBDA_TASK_ROOT || "/var/task";
+const candidates = [
+  `${base}/${modName}.ts`,
+  `${base}/${modName}.js`,
+  `${base}/${modName}.mjs`,
+  `${base}/${modName}`,
+];
+let mod;
+for (const p of candidates) {
+  try {
+    mod = await import(p);
+    break;
+  } catch {
+    /* try next */
+  }
+}
+if (!mod) {
+  console.error("failed to load handler module", modName);
+  process.exit(1);
+}
+const resolved =
+  typeof mod.default === "object" && mod.default && exportName in mod.default
+    ? mod.default[exportName]
+    : mod[exportName] ?? mod.default?.fetch ?? mod.default ?? mod.handler;
+if (typeof resolved !== "function") {
+  console.error("handler is not a function", handlerSpec);
+  process.exit(1);
+}
+
+const nextUrl = `http://${runtimeApi}/2018-06-01/runtime/invocation/next`;
+
+while (true) {
+  const next = await fetch(nextUrl);
+  if (!next.ok) {
+    console.error("next failed", next.status);
+    await Bun.sleep(100);
+    continue;
+  }
+  const requestId = next.headers.get("Lambda-Runtime-Aws-Request-Id");
+  const deadlineMs = Number(next.headers.get("Lambda-Runtime-Deadline-Ms") || "0");
+  const raw = await next.text();
+  let event;
+  try {
+    event = raw ? JSON.parse(raw) : {};
+  } catch {
+    event = { body: raw };
+  }
+  const context = {
+    awsRequestId: requestId,
+    functionName: process.env.AWS_LAMBDA_FUNCTION_NAME,
+    functionVersion: process.env.AWS_LAMBDA_FUNCTION_VERSION,
+    memoryLimitInMB: process.env.AWS_LAMBDA_FUNCTION_MEMORY_SIZE,
+    getRemainingTimeInMillis: () => Math.max(0, deadlineMs - Date.now()),
+  };
+  try {
+    // Function URL / HTTP API payload → Request for fetch-style handlers
+    let result;
+    if (event.requestContext?.http || event.rawPath || event.headers) {
+      const method = event.requestContext?.http?.method || event.httpMethod || "GET";
+      const path = event.rawPath || event.path || "/";
+      const qs = event.rawQueryString
+        ? `?${event.rawQueryString}`
+        : event.queryStringParameters
+          ? `?${new URLSearchParams(event.queryStringParameters)}`
+          : "";
+      const host =
+        event.headers?.host ||
+        event.headers?.Host ||
+        event.requestContext?.domainName ||
+        "lambda";
+      const url = `https://${host}${path}${qs}`;
+      const headers = new Headers();
+      const h = event.headers || {};
+      for (const [k, v] of Object.entries(h)) {
+        if (v != null) headers.set(k, String(v));
+      }
+      let body = event.body ?? null;
+      if (body && event.isBase64Encoded) {
+        body = Buffer.from(body, "base64");
+      }
+      const req = new Request(url, {
+        method,
+        headers,
+        body: method === "GET" || method === "HEAD" ? undefined : body,
+      });
+      result = await resolved(req, context);
+    } else {
+      result = await resolved(event, context);
+    }
+
+    let statusCode = 200;
+    let respHeaders = { "content-type": "application/json" };
+    let respBody = "";
+    if (result instanceof Response) {
+      statusCode = result.status;
+      respHeaders = Object.fromEntries(result.headers.entries());
+      respBody = await result.text();
+    } else if (result && typeof result === "object" && "statusCode" in result) {
+      statusCode = result.statusCode ?? 200;
+      respHeaders = result.headers || respHeaders;
+      respBody =
+        typeof result.body === "string"
+          ? result.body
+          : JSON.stringify(result.body ?? {});
+    } else {
+      respBody = JSON.stringify(result ?? null);
+    }
+
+    const payload = JSON.stringify({
+      statusCode,
+      headers: respHeaders,
+      body: respBody,
+    });
+    await fetch(
+      `http://${runtimeApi}/2018-06-01/runtime/invocation/${requestId}/response`,
+      { method: "POST", body: payload },
+    );
+  } catch (e) {
+    const errBody = JSON.stringify({
+      errorMessage: e?.message || String(e),
+      errorType: e?.name || "Error",
+      stackTrace: e?.stack ? String(e.stack).split("\n") : [],
+    });
+    await fetch(
+      `http://${runtimeApi}/2018-06-01/runtime/invocation/${requestId}/error`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Lambda-Runtime-Function-Error-Type": "Unhandled",
+        },
+        body: errBody,
+      },
+    );
+  }
+}
+'
