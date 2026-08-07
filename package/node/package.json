@@ -4,6 +4,6 @@
   "type": "module",
   "private": true,
   "dependencies": {
-    "wreq-js": "npm:@alice-doctor/wreq-js@2.3.3"
+    "wreq-js": "npm:@alice-doctor/wreq-js@latest"
   }
 }

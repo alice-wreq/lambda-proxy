@@ -5,7 +5,8 @@
  *
  * 요청 body(JSON):
  *   {
- *     url, method='GET', headers={}, data, encoding,
+ *     url, method='GET', headers={}, data, encoding, // encoding=응답 (base64|…)
+ *     dataEncoding?,     // 'base64' 이면 data 는 요청 본문 base64 (gzip 등)
  *     browser?,          // 프리셋 프로필 (getProfiles() 전체)
  *     os?,               // windows|macos|linux|android|ios
  *     proxy?,
@@ -89,6 +90,27 @@ function buildEmulation(body: any): any | undefined {
         return undefined;
     }
     return emu;
+}
+
+/**
+ * 업스트림 요청 본문.
+ * dataEncoding=base64 → Buffer. Node Buffer JSON 형태 복구.
+ */
+function resolveRequestBody(data: any, dataEncoding?: string): any {
+    if (data == null) return null;
+    if (dataEncoding === 'base64' && typeof data === 'string') {
+        return Buffer.from(data, 'base64');
+    }
+    if (
+        typeof data === 'object' &&
+        data.type === 'Buffer' &&
+        Array.isArray(data.data)
+    ) {
+        return Buffer.from(data.data);
+    }
+    if (typeof data === 'string') return data;
+    if (typeof Buffer !== 'undefined' && Buffer.isBuffer(data)) return data;
+    return JSON.stringify(data);
 }
 
 export default {
@@ -196,6 +218,7 @@ export default {
                 headers = {},
                 data,
                 encoding,
+                dataEncoding,
                 browser,
                 os,
                 proxy,
@@ -248,12 +271,7 @@ export default {
                     : {}),
             };
 
-            const reqBody =
-                data == null
-                    ? null
-                    : typeof data === 'string'
-                      ? data
-                      : JSON.stringify(data);
+            const reqBody = resolveRequestBody(data, dataEncoding);
 
             const fetchStart = Date.now();
             // wreq-js: get(url, init) / post(url, body, init) — body 는 포지셔널.

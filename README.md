@@ -55,7 +55,7 @@ HTTP 클라이언트: **`@alice-doctor/wreq-js`** (브라우저 TLS 위장)
 | `LAMBDA_WREQ_ARCH` | 기존 함수에서 자동 감지 (`arm64` / `x86_64`) |
 | `LAMBDA_WREQ_ROLE` | 기존 함수 role 또는 `--create-role` |
 | `LAMBDA_WREQ_BUN_LAYER` | 기존 layer ARN |
-| `LAMBDA_WREQ_NPM_VER` | `2.3.3` |
+| `LAMBDA_WREQ_NPM_VER` | `latest` |
 | `LAMBDA_WREQ_NATIVE` | linux-*.node 경로 |
 
 ## 구조
@@ -74,7 +74,7 @@ out/   # 로컬 산출물 (gitignore)
 
 - `GET /health` — 상태·프로필 수
 - `GET /profiles` — 지원 프로필 목록
-- `POST /` — body: `url`, `method`, `headers`, `data`, `browser`, `os`, `proxy`, `emulation`/`tls`, …
+- `POST /` — body: `url`, `method`, `headers`, `data`, `encoding`(응답), `dataEncoding`(`base64`=요청 본문 바이너리), `browser`, `os`, `proxy`, `emulation`/`tls`, …
 
 ## 라이선스
 

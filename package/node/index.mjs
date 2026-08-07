@@ -5,7 +5,8 @@
  *
  * body(JSON):
  *   {
- *     url, method='GET', headers={}, data, encoding,
+ *     url, method='GET', headers={}, data, encoding,  // encoding = 응답 인코딩 (base64|…)
+ *     dataEncoding?,   // 'base64' 이면 data 는 요청 본문 base64 (gzip 바이너리 등)
  *     browser?, os?, proxy?, timeout?, insecure?, disableDefaultHeaders?,
  *     emulation?: { tlsOptions?, http1Options?, http2Options?, headers?, origHeaders? },
  *     tls?: { ... CustomTlsOptions },  // emulation.tlsOptions 단축
@@ -69,6 +70,30 @@ function buildEmulation(body) {
     return undefined;
   }
   return emu;
+}
+
+/**
+ * 업스트림 요청 본문.
+ * - dataEncoding=base64 + string → Buffer (gzip 등 바이너리)
+ * - Node Buffer JSON {type:'Buffer',data:number[]} 복구
+ * - string → 그대로
+ * - object → JSON.stringify
+ */
+function resolveRequestBody(data, dataEncoding) {
+  if (data == null) return null;
+  if (dataEncoding === 'base64' && typeof data === 'string') {
+    return Buffer.from(data, 'base64');
+  }
+  if (
+    typeof data === 'object' &&
+    data.type === 'Buffer' &&
+    Array.isArray(data.data)
+  ) {
+    return Buffer.from(data.data);
+  }
+  if (typeof data === 'string') return data;
+  if (Buffer.isBuffer(data)) return data;
+  return JSON.stringify(data);
 }
 
 function json(statusCode, obj, extraHeaders = {}) {
@@ -183,6 +208,7 @@ export const handler = async (event) => {
       headers = {},
       data,
       encoding,
+      dataEncoding,
       browser,
       os,
       proxy,
@@ -224,12 +250,7 @@ export const handler = async (event) => {
         : {}),
     };
 
-    const reqBody =
-      data == null
-        ? null
-        : typeof data === 'string'
-          ? data
-          : JSON.stringify(data);
+    const reqBody = resolveRequestBody(data, dataEncoding);
 
     const fetchStart = Date.now();
     const m = String(method).toUpperCase();
