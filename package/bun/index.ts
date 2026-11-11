@@ -274,42 +274,16 @@ export default {
             const reqBody = resolveRequestBody(data, dataEncoding);
 
             const fetchStart = Date.now();
-            // wreq-js: get(url, init) / post(url, body, init) — body 는 포지셔널.
-            // 범용 method 는 request(url, { method, body, ...init }) 도 지원.
             const m = String(method).toUpperCase();
-            let res: any;
-            if (m === 'GET' && typeof w.get === 'function') {
-                res = await w.get(url, init);
-            } else if (
-                typeof w[m.toLowerCase()] === 'function' &&
-                m !== 'GET'
-            ) {
-                res = await w[m.toLowerCase()](url, reqBody, init);
-            } else if (typeof w.request === 'function') {
-                res = await w.request(url, {
-                    ...init,
-                    method: m,
-                    body: reqBody,
-                });
-            } else if (typeof w.fetch === 'function') {
-                res = await w.fetch(url, {
-                    ...init,
-                    method: m,
-                    body: reqBody,
-                });
-            } else {
-                throw new Error(`지원하지 않는 method: ${method}`);
-            }
+            const res = await w.fetch(url, {
+                ...init,
+                method: m,
+                ...(m !== 'GET' && m !== 'HEAD' ? { body: reqBody } : {}),
+            });
             const fetchEnd = Date.now();
 
             const ct = res.headers?.get?.('content-type') || '';
-            // wreq-js Response 는 Set-Cookie 를 표준 Headers 가 아니라 별도 res.cookies
-            // (Record<name, value|value[]>) 로 분리한다. getSetCookie() 는 항상 [] 이므로 쓰면 안 됨.
-            const cookieRecord: Record<string, string | string[]> =
-                res.cookies || {};
-            const setCookie = Object.entries(cookieRecord).flatMap(([k, v]) =>
-                Array.isArray(v) ? v.map((x) => `${k}=${x}`) : [`${k}=${v}`],
-            );
+            const setCookie = res.headers.getSetCookie();
 
             let payload: any;
             if (encoding === 'base64') {

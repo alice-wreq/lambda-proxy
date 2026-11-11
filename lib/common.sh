@@ -311,73 +311,40 @@ detect_arch_from_function() {
 }
 
 ensure_native_binary() {
+  local installed_dir="$1" version="$2"
   local triple
   triple="$(native_triple)"
-  local ver_dir="$OUT_DIR/native/${LAMBDA_WREQ_NPM_VER}"
+  local ver_dir="$OUT_DIR/native/$version"
   mkdir -p "$ver_dir"
   local dest="$ver_dir/wreq-js.${triple}.node"
   local asset="wreq-js.${triple}.node"
 
-  if [[ -n "${LAMBDA_WREQ_NATIVE}" && -f "${LAMBDA_WREQ_NATIVE}" ]]; then
-    cp -f "$LAMBDA_WREQ_NATIVE" "$dest"
+  if [[ -n "${LAMBDA_WREQ_NATIVE}" ]]; then
+    [[ -s "$LAMBDA_WREQ_NATIVE" ]] || die "LAMBDA_WREQ_NATIVE 파일 없음: $LAMBDA_WREQ_NATIVE"
+    warn "명시적 native 사용 — 설치된 wreq-js $version 과 호환되어야 합니다"
+    printf '%s' "$LAMBDA_WREQ_NATIVE"
+    return 0
+  fi
+  if [[ -s "$installed_dir/rust/$asset" ]]; then
+    printf '%s' "$installed_dir/rust/$asset"
+    return 0
+  fi
+  if [[ -s "$dest" ]]; then
     printf '%s' "$dest"
     return 0
   fi
-  if [[ -f "$dest" ]]; then
-    printf '%s' "$dest"
-    return 0
-  fi
-  for cand in \
-    "$OUT_DIR/$asset" \
-    "$OUT_DIR/native/${LAMBDA_WREQ_NPM_VER}/$asset" \
-    /tmp/wreq-native-fresh/"$asset" \
-    /tmp/wreq-x64/"$asset"
-  do
-    if [[ -f "$cand" ]]; then
-      cp -f "$cand" "$dest"
-      ok "native 캐시: $cand"
-      printf '%s' "$dest"
-      return 0
-    fi
-  done
-  if command -v gh >/dev/null 2>&1; then
-    local tmpd; tmpd="$(mktemp -d)"
-    local okdl=0
-    if [[ "$triple" == "linux-arm64-gnu" ]]; then
-      gh run download -R alice-wreq/wreq-js -n node-linux-arm64-gnu -D "$tmpd" 2>/dev/null && okdl=1
-      gh run download -R alice-wreq/wreq-js -n bindings-aarch64-unknown-linux-gnu -D "$tmpd" 2>/dev/null && okdl=1
-    else
-      gh run download -R alice-wreq/wreq-js -n node-linux-x64-gnu -D "$tmpd" 2>/dev/null && okdl=1
-      gh run download -R alice-wreq/wreq-js -n bindings-x86_64-unknown-linux-gnu -D "$tmpd" 2>/dev/null && okdl=1
-    fi
-    if [[ "$okdl" -eq 1 ]]; then
-      local f; f="$(find "$tmpd" -name "*${triple}*.node" -o -name '*.node' | head -1)"
-      if [[ -n "$f" ]]; then
-        cp -f "$f" "$dest"
-        rm -rf "$tmpd"
-        ok "native gh: $dest"
-        printf '%s' "$dest"
-        return 0
-      fi
-    fi
-    rm -rf "$tmpd"
-  fi
-  local tag="v${LAMBDA_WREQ_NPM_VER}"
-  if curl -fsSL "https://github.com/alice-wreq/wreq-js/releases/download/${tag}/${asset}" -o "$dest" 2>/dev/null \
-    && [[ -s "$dest" ]]; then
+  local tag="v$version"
+  local download
+  download="$(mktemp "$ver_dir/.download.XXXXXX")"
+  if curl -fsSL "https://github.com/alice-wreq/wreq-js/releases/download/${tag}/${asset}" -o "$download" \
+    && [[ -s "$download" ]]; then
+    mv -f "$download" "$dest"
     chmod +x "$dest"
     printf '%s' "$dest"
     return 0
   fi
-  if curl -fsSL "https://github.com/alice-wreq/wreq-js/releases/latest/download/${asset}" -o "$dest" 2>/dev/null \
-    && [[ -s "$dest" ]]; then
-    warn "native: latest ${asset}"
-    chmod +x "$dest"
-    printf '%s' "$dest"
-    return 0
-  fi
-  rm -f "$dest"
-  die "${triple} native 없음. LAMBDA_WREQ_NATIVE=... 또는 out/native/${LAMBDA_WREQ_NPM_VER}/${asset}"
+  rm -f "$download"
+  die "${tag} ${triple} native 없음. LAMBDA_WREQ_NATIVE=... 또는 out/native/${version}/${asset}"
 }
 
 build_zip() {
@@ -386,8 +353,6 @@ build_zip() {
 
   local build_dir="$OUT_DIR/build-$flavor"
   local zip_path="$OUT_DIR/$ZIP_NAME"
-  local native
-  native="$(ensure_native_binary)"
 
   rm -rf "$build_dir"
   mkdir -p "$build_dir"
@@ -424,12 +389,17 @@ PY
   fi
   [[ -d "$build_dir/node_modules/wreq-js" ]] || die "node_modules/wreq-js 없음"
 
-  mkdir -p "$build_dir/node_modules/wreq-js/rust"
-  rm -f "$build_dir/node_modules/wreq-js/rust/"*.node
-  local triple
+  local installed_dir="$build_dir/node_modules/wreq-js"
+  local version native triple
+  version="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$installed_dir/package.json")"
+  native="$(ensure_native_binary "$installed_dir" "$version")"
   triple="$(native_triple)"
-  cp -f "$native" "$build_dir/node_modules/wreq-js/rust/wreq-js.${triple}.node"
-  info "native: wreq-js.${triple}.node (arch=${LAMBDA_WREQ_ARCH})"
+  mkdir -p "$installed_dir/rust"
+  if [[ "$native" != "$installed_dir/rust/wreq-js.${triple}.node" ]]; then
+    cp -f "$native" "$installed_dir/rust/wreq-js.${triple}.node"
+  fi
+  find "$installed_dir/rust" -name '*.node' ! -name "wreq-js.${triple}.node" -delete
+  info "native: wreq-js.${triple}.node (version=$version, arch=${LAMBDA_WREQ_ARCH})"
 
   rm -f "$zip_path"
   ( cd "$build_dir" && zip -qr "$zip_path" . -x "*.map" -x "*darwin*" )

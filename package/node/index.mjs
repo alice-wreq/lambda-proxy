@@ -254,25 +254,15 @@ export const handler = async (event) => {
 
     const fetchStart = Date.now();
     const m = String(method).toUpperCase();
-    let res;
-    if (m === 'GET' && typeof w.get === 'function') {
-      res = await w.get(url, init);
-    } else if (typeof w[m.toLowerCase()] === 'function' && m !== 'GET') {
-      res = await w[m.toLowerCase()](url, reqBody, init);
-    } else if (typeof w.request === 'function') {
-      res = await w.request(url, { ...init, method: m, body: reqBody });
-    } else if (typeof w.fetch === 'function') {
-      res = await w.fetch(url, { ...init, method: m, body: reqBody });
-    } else {
-      throw new Error(`지원하지 않는 method: ${method}`);
-    }
+    const res = await w.fetch(url, {
+      ...init,
+      method: m,
+      ...(m !== 'GET' && m !== 'HEAD' ? { body: reqBody } : {}),
+    });
     const fetchEnd = Date.now();
 
     const ct = res.headers?.get?.('content-type') || '';
-    const cookieRecord = res.cookies || {};
-    const setCookie = Object.entries(cookieRecord).flatMap(([k, v]) =>
-      Array.isArray(v) ? v.map((x) => `${k}=${x}`) : [`${k}=${v}`],
-    );
+    const setCookie = res.headers.getSetCookie();
 
     let payload;
     if (encoding === 'base64') {

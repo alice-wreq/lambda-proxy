@@ -12,8 +12,9 @@ HTTP 클라이언트: **`@alice-doctor/wreq-js`** (브라우저 TLS 위장)
 
 - AWS CLI 로그인 (`aws sts get-caller-identity`)
 - `npm`, `python3`, `curl`, `zip`, `unzip`
-- 대상 arch 용 native: `wreq-js.linux-arm64-gnu.node` 또는 `linux-x64-gnu`  
-  (`LAMBDA_WREQ_NATIVE` 또는 `out/native/<ver>/` / CI 다운로드)
+- 대상 arch 용 native: npm 패키지에 포함된 `linux-arm64-gnu` 또는 `linux-x64-gnu` 사용.
+  없으면 실제 설치 버전의 캐시 및 같은 GitHub 릴리스에서만 가져옵니다.
+  `LAMBDA_WREQ_NATIVE`를 지정하면 해당 파일이 우선하며, 패키지 버전과 호환되어야 합니다.
 
 ## 사용
 
@@ -75,6 +76,20 @@ out/   # 로컬 산출물 (gitignore)
 - `GET /health` — 상태·프로필 수
 - `GET /profiles` — 지원 프로필 목록
 - `POST /` — body: `url`, `method`, `headers`, `data`, `encoding`(응답), `dataEncoding`(`base64`=요청 본문 바이너리), `browser`, `os`, `proxy`, `emulation`/`tls`, …
+
+모든 HTTP 메서드는 wreq의 `fetch`로 전달하며 GET/HEAD에는 요청 본문을 보내지 않습니다.
+응답 JSON의 `setCookie`는 Path, Domain, Expires, Secure 등 속성을 포함한 원본 `Set-Cookie` 배열입니다.
+`proxy`에 `http://proxy:8080#force-absolute`를 지정하면 wreq-js의 absolute-form 옵션도 사용할 수 있습니다.
+
+## 로컬 회귀 테스트 (AWS 호출 없음)
+
+```bash
+npm install --prefix package/node --ignore-scripts --package-lock=false
+npm install --prefix package/bun --ignore-scripts --package-lock=false
+node tests/handlers.mjs node
+bun tests/handlers.mjs bun
+bash tests/native.sh
+```
 
 ## 라이선스
 
